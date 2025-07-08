@@ -1,0 +1,7 @@
+{
+  "files.associations": {
+    "__config": "c",
+    "ostream": "c",
+    "print": "c"
+  }
+}
