@@ -11,9 +11,9 @@
 void doit(int fd);
 void read_requesthdrs(rio_t *rp);
 int parse_uri(char *uri, char *filename, char *cgiargs);
-void serve_static(int fd, char *filename, int filesize);
 void get_filetype(char *filename, char *filetype);
-void serve_dynamic(int fd, char *filename, char *cgiargs);
+void serve_static(int fd, char *filename, int filesize, int is_head);
+void serve_dynamic(int fd, char *filename, char *cgiargs, int is_head);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
 
 int main(int argc, char **argv)
@@ -42,7 +42,7 @@ int main(int argc, char **argv)
   }
 }
 
-void serve_dynamic(int fd, char *filename, char *cgiargs) //
+void serve_dynamic(int fd, char *filename, char *cgiargs, int is_head) //
 {
   char buf[MAXLINE], *emptylist[] = {NULL};
 
@@ -57,6 +57,11 @@ void serve_dynamic(int fd, char *filename, char *cgiargs) //
   sprintf(buf, "Connection: close\r\n\r\n");
   Rio_writen(fd, buf, strlen(buf));
 
+  if (is_head)
+  {
+    return;
+  }
+
   if (Fork() == 0) // Fork 시그널로 새로운 자식 프로세스 생성 // 반환값이 0인 쪽이 자식.
   {
     /* Real server would set all CGI vars here */
@@ -69,7 +74,7 @@ void serve_dynamic(int fd, char *filename, char *cgiargs) //
 }
 
 // serve_static 함수는 정적 파일을 클라이언트에 서비스한다.
-void serve_static(int fd, char *filename, int filesize)
+void serve_static(int fd, char *filename, int filesize, int is_head)
 {
   int srcfd;
   char *srcp, filetype[MAXLINE], buf[MAXBUF];
@@ -87,7 +92,7 @@ void serve_static(int fd, char *filename, int filesize)
   sprintf(buf + strlen(buf), "Content-length: %d\r\n", filesize);
   sprintf(buf + strlen(buf), "Content-type: %s\r\n\r\n", filetype);
 
-  Rio_writen(fd, buf, strlen(buf));
+  Rio_writen(fd, buf, strlen(buf)); // header 반환
   printf("Response headers::::\n");
   printf("%s", buf);
 
@@ -97,7 +102,12 @@ void serve_static(int fd, char *filename, int filesize)
   // Close(srcfd);                                               // 이 시점에서 파일 디스크립터는 더 이상 필요 없으므로, Close(srcfd)로 즉시 닫는다.
   // Rio_writen(fd, srcp, filesize);                             // mmap이 반환한 포인터(srcp)가 가리키는 메모리 영역에서 filesize 만큼의 데이터를 클라이언트의 소켓 디스크립터로 직접 전송한다.
   // Munmap(srcp, filesize);                                     // 파일 전송이 완료된 후, Munmap 함수로 mmap으로 생성된 가상 메모리 영역을 해제한다.
-  // mmap 방식은
+  // mmap 방식은 malloc 구현 방식보다 ...
+
+  if (is_head)
+  {
+    return;
+  }
 
   /* malloc으로 구현 */
   srcfd = Open(filename, O_RDONLY, 0);
@@ -207,7 +217,7 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
 
 void doit(int fd)
 {
-  int is_static;
+  int is_static, is_head;
   struct stat sbuf;
   char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
   char filename[MAXLINE], cgiargs[MAXLINE];
@@ -218,14 +228,14 @@ void doit(int fd)
   Rio_readlineb(&rio, buf, MAXLINE); // 라인 읽기
   printf("Reqeust headers:\n");
   printf("%s", buf);
-  sscanf(buf, "%s %s %s", method, uri, version);
-  if (strcasecmp(method, "GET"))
+  sscanf(buf, "%s %s %s", method, uri, version);               // 문자열에서 형식화된 데이터를 읽어온다.
+  if (strcasecmp(method, "GET") && strcasecmp(method, "HEAD")) // strcasecmp 두 문자열을 비교한다.
   {
     clienterror(fd, method, "501", "Not implemented", "Tiny does not implement this method");
     return;
   }
 
-  read_requesthdrs(&rio);
+  read_requesthdrs(&rio); // 이 메서드가 실행하는 것은?
 
   /* Parse URI from GET request */
   is_static = parse_uri(uri, filename, cgiargs);
@@ -242,7 +252,7 @@ void doit(int fd)
       clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't read the file");
       return;
     }
-    serve_static(fd, filename, sbuf.st_size);
+    serve_static(fd, filename, sbuf.st_size, is_head);
   }
   else
   {
@@ -251,6 +261,6 @@ void doit(int fd)
       clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't run the CGI program");
       return;
     }
-    serve_dynamic(fd, filename, cgiargs);
+    serve_dynamic(fd, filename, cgiargs, is_head);
   }
 }
